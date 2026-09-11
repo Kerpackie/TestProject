@@ -2,6 +2,8 @@ add_library(database STATIC
   src/database.cpp
   src/database_factory.cpp
   src/transaction.cpp
+  src/repository/sqlite_user_repository.cpp
+  src/service/user_service.cpp
 )
 
 # Public interface: only include/ is exposed to consumers.

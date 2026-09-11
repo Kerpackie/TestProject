@@ -1,10 +1,14 @@
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 
 #include "core/core.h"
 #include "database/database.h"
 #include "database/database_config.h"
 #include "database/database_factory.h"
+#include "database/domain/user.h"
+#include "database/repository/sqlite_user_repository.h"
+#include "database/service/user_service.h"
 #include "database/transaction.h"
 
 int main() {
@@ -12,44 +16,50 @@ int main() {
   std::cout << "Database module version " << database::version() << '\n';
 
   try {
+    // 1. Composition Root: Infrastructure Configuration
     database::DatabaseConfig config{
         .database_path = ":memory:",
         .busy_timeout = std::chrono::milliseconds(5000),
         .foreign_keys = true,
     };
 
+    // 2. Composition Root: Instantiate Infrastructure Connection
     database::Connection conn = database::DatabaseFactory::create(config);
 
-    // 1. Setup schema
-    conn.execute("CREATE TABLE accounts (id INTEGER PRIMARY KEY, name TEXT NOT NULL, balance INT NOT NULL)");
+    // 3. Composition Root: Instantiate Concrete Repository
+    database::repository::SqliteUserRepository user_repo(conn);
+    user_repo.init_schema();
 
-    // 2. Perform committed transaction
+    // 4. Composition Root: Inject Repository into Application Service (Manual DI)
+    database::service::UserService user_service(user_repo);
+
+    std::cout << "\n--- Executing Phase 3 Application Use Cases (Manual DI) ---\n";
+
+    // Use Case 1: Register Users
     {
       database::Transaction tx(conn);
-      conn.execute("INSERT INTO accounts (name, balance) VALUES ('Alice', 1000)");
-      conn.execute("INSERT INTO accounts (name, balance) VALUES ('Bob', 500)");
+      auto user1 = user_service.register_user("Ada Lovelace", "ada@example.com");
+      auto user2 = user_service.register_user("Alan Turing", "alan@example.com");
       tx.commit();
-      std::cout << "Transaction 1 committed successfully.\n";
+      std::cout << "Registered users in transaction: ID " << user1.id << " (" << user1.name << "), ID " << user2.id << " (" << user2.name << ")\n";
     }
 
-    // 3. Perform uncommitted / exception transaction (rollback demonstration)
+    // Use Case 2: Query Users
+    auto all_users = user_service.list_users();
+    std::cout << "Total registered users: " << all_users.size() << '\n';
+    for (const auto& user : all_users) {
+      std::cout << " - [" << user.id << "] " << user.name << " <" << user.email << ">\n";
+    }
+
+    // Use Case 3: Duplicate Registration Validation (Service Business Logic)
     try {
-      database::Transaction tx(conn);
-      conn.execute("INSERT INTO accounts (name, balance) VALUES ('Charlie', 250)");
-      std::cout << "Simulating an error before commit...\n";
-      throw std::runtime_error("Database operational glitch");
-      tx.commit();
-    } catch (const std::runtime_error& e) {
-      std::cout << "Caught expected exception during transaction: " << e.what() << '\n';
-      std::cout << "Uncommitted transaction rolled back automatically on scope exit.\n";
+      user_service.register_user("Ada Duplicate", "ada@example.com");
+    } catch (const database::service::UserAlreadyExistsException& e) {
+      std::cout << "Caught expected domain exception: " << e.what() << '\n';
     }
-
-    // 4. Verify account count
-    const int count = conn.execute_scalar_int("SELECT COUNT(*) FROM accounts");
-    std::cout << "Final account count in database: " << count << " (expected: 2)\n";
 
   } catch (const std::exception& e) {
-    std::cerr << "Fatal database error: " << e.what() << '\n';
+    std::cerr << "Fatal error in Composition Root: " << e.what() << '\n';
     return 1;
   }
 
