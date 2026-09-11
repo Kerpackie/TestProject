@@ -310,3 +310,120 @@ TEST_P(CrossEngineContractTest, NormalizedConflictExceptionOnDuplicateInsert) {
     FAIL() << "Caught unnormalized exception: " << ex.what();
   }
 }
+
+// -----------------------------------------------------------------------------
+// Phase 5: Concurrency, Thread Safety, Connection Pool & Retry Policy Tests
+// -----------------------------------------------------------------------------
+
+#include <atomic>
+#include <thread>
+#include <vector>
+
+#include "database/concurrency/connection_pool.h"
+#include "database/concurrency/retry_policy.h"
+
+TEST(ConnectionPoolTest, AcquireAndReleaseLifecycle) {
+  database::DatabaseConfig config{.database_path = ":memory:"};
+  database::concurrency::ConnectionPool pool(config, 2);
+
+  EXPECT_EQ(pool.size(), 2);
+  EXPECT_EQ(pool.available(), 2);
+
+  {
+    auto conn1 = pool.acquire();
+    EXPECT_EQ(pool.available(), 1);
+
+    auto conn2 = pool.acquire();
+    EXPECT_EQ(pool.available(), 0);
+
+    conn1->execute("CREATE TABLE pool_test (id INT)");
+    conn2->execute("CREATE TABLE pool_test_2 (id INT)");
+  }
+
+  // Connections returned on destructor
+  EXPECT_EQ(pool.available(), 2);
+}
+
+TEST(RetryPolicyTest, BoundedRetriesOnTransientErrors) {
+  database::concurrency::RetryPolicy retry(3, std::chrono::milliseconds(1));
+  database::concurrency::RetryStats stats;
+
+  int call_count = 0;
+  retry.execute([&call_count]() {
+    call_count++;
+    if (call_count < 3) {
+      throw database::error::TransientException("Database lock busy", database::error::EngineType::SQLite);
+    }
+  }, &stats);
+
+  EXPECT_EQ(call_count, 3);
+  EXPECT_EQ(stats.retries, 2);
+  EXPECT_TRUE(stats.succeeded);
+
+  // Permanent constraint error should fail immediately without retrying
+  int permanent_calls = 0;
+  EXPECT_THROW(retry.execute([&permanent_calls]() {
+    permanent_calls++;
+    throw database::error::ConflictException("Unique violation", database::error::EngineType::SQLite);
+  }), database::error::ConflictException);
+
+  EXPECT_EQ(permanent_calls, 1);
+}
+
+TEST(ConcurrencyTest, MultiWorkerConcurrentReadsAndWrites) {
+  const std::string db_file = "test_concurrent.db";
+  std::filesystem::remove(db_file);
+
+  database::DatabaseConfig config{
+      .database_path = db_file,
+      .busy_timeout = std::chrono::milliseconds(5000),
+      .foreign_keys = true,
+      .wal_mode = true,
+  };
+
+  // Setup schema
+  {
+    database::Connection setup_conn(config);
+    setup_conn.execute("CREATE TABLE IF NOT EXISTS counter (id INT PRIMARY KEY, val INT)");
+    setup_conn.execute("INSERT INTO counter VALUES (1, 0)");
+  }
+
+  database::concurrency::ConnectionPool pool(config, 4);
+  database::concurrency::RetryPolicy retry(10, std::chrono::milliseconds(10));
+
+  constexpr int num_workers = 8;
+  constexpr int increments_per_worker = 10;
+  std::atomic<int> successful_writes{0};
+
+  std::vector<std::thread> workers;
+  workers.reserve(num_workers);
+
+  for (int w = 0; w < num_workers; ++w) {
+    workers.emplace_back([&pool, &retry, &successful_writes]() {
+      for (int i = 0; i < increments_per_worker; ++i) {
+        auto conn = pool.acquire();
+        retry.execute([&conn, &successful_writes]() {
+          database::Transaction tx(conn.get());
+          int current = conn->execute_scalar_int("SELECT val FROM counter WHERE id = 1");
+          conn->execute("UPDATE counter SET val = " + std::to_string(current + 1) + " WHERE id = 1");
+          tx.commit();
+          successful_writes++;
+        });
+      }
+    });
+  }
+
+  for (auto& t : workers) {
+    t.join();
+  }
+
+  EXPECT_EQ(successful_writes.load(), num_workers * increments_per_worker);
+
+  database::Connection check_conn(config);
+  const int final_val = check_conn.execute_scalar_int("SELECT val FROM counter WHERE id = 1");
+  EXPECT_EQ(final_val, num_workers * increments_per_worker);
+
+  std::filesystem::remove(db_file);
+  std::filesystem::remove(db_file + "-wal");
+  std::filesystem::remove(db_file + "-shm");
+}

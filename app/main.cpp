@@ -1,12 +1,16 @@
 #include <iostream>
 #include <memory>
 #include <vector>
+#include <thread>
+#include <filesystem>
 #include <stdexcept>
 
 #include "core/core.h"
 #include "database/adapter/mariadb_adapter.h"
 #include "database/adapter/postgres_adapter.h"
 #include "database/adapter/sqlite_session.h"
+#include "database/concurrency/connection_pool.h"
+#include "database/concurrency/retry_policy.h"
 #include "database/database.h"
 #include "database/database_config.h"
 #include "database/database_factory.h"
@@ -106,6 +110,59 @@ int main() {
     for (auto* factory : factories) {
       demonstrate_engine_session(*factory);
     }
+
+    // -------------------------------------------------------------------------
+    // Phase 5: Concurrency & Thread-Safe Connection Pool Demonstration
+    // -------------------------------------------------------------------------
+    std::cout << "\n================================------------------------\n";
+    std::cout << " Phase 5: Concurrency, Thread Safety & Connection Pool";
+    std::cout << "\n================================------------------------\n";
+
+    const std::string app_db_file = "app_concurrent.db";
+    std::filesystem::remove(app_db_file);
+
+    database::DatabaseConfig concurrent_config{
+        .database_path = app_db_file,
+        .busy_timeout = std::chrono::milliseconds(5000),
+        .foreign_keys = true,
+        .wal_mode = true,
+    };
+
+    // Setup initial table schema
+    {
+      database::Connection init_conn(concurrent_config);
+      init_conn.execute("CREATE TABLE IF NOT EXISTS audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, worker TEXT, timestamp TEXT)");
+    }
+
+    database::concurrency::ConnectionPool pool(concurrent_config, 4);
+    database::concurrency::RetryPolicy retry(3, std::chrono::milliseconds(10));
+
+    std::cout << "ConnectionPool initialized with 4 PooledConnections in WAL mode.\n";
+    std::cout << "Dispatching 4 concurrent worker threads to write audit logs...\n";
+
+    std::vector<std::thread> workers;
+    for (int w = 1; w <= 4; ++w) {
+      workers.emplace_back([&pool, &retry, w]() {
+        auto conn = pool.acquire();
+        retry.execute([&conn, w]() {
+          database::Transaction tx(conn.get());
+          conn->execute("INSERT INTO audit_log (worker, timestamp) VALUES ('Worker-" + std::to_string(w) + "', '2026-09-11 12:00:00')");
+          tx.commit();
+        });
+      });
+    }
+
+    for (auto& t : workers) {
+      t.join();
+    }
+
+    database::Connection check_conn(concurrent_config);
+    const int audit_count = check_conn.execute_scalar_int("SELECT COUNT(*) FROM audit_log");
+    std::cout << "Concurrent audit writes completed successfully. Total log entries: " << audit_count << '\n';
+
+    std::filesystem::remove(app_db_file);
+    std::filesystem::remove(app_db_file + "-wal");
+    std::filesystem::remove(app_db_file + "-shm");
 
   } catch (const std::exception& e) {
     std::cerr << "Fatal error in Composition Root: " << e.what() << '\n';

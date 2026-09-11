@@ -7,6 +7,8 @@ add_library(database STATIC
   src/adapter/sqlite_session.cpp
   src/adapter/postgres_adapter.cpp
   src/adapter/mariadb_adapter.cpp
+  src/concurrency/connection_pool.cpp
+  src/concurrency/retry_policy.cpp
 )
 
 # Public interface: only include/ is exposed to consumers.
