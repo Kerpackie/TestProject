@@ -106,16 +106,20 @@ TEST(DatabaseLifecycleTest, ConnectionMoveSemantics) {
 // Fake In-Memory Repository for isolated UserService Unit Testing
 class FakeUserRepository final : public database::repository::IUserRepository {
  public:
-  std::optional<database::domain::User> find_by_id(std::int64_t id) override {
-    auto it = std::find_if(users_.begin(), users_.end(), [id](const auto& u) { return u.id == id; });
+  std::optional<database::domain::User> find_by_id(std::int64_t id, bool include_deleted = false) override {
+    auto it = std::find_if(users_.begin(), users_.end(), [id, include_deleted](const auto& u) {
+      return u.id == id && (include_deleted || !u.deleted_at.has_value());
+    });
     if (it != users_.end()) {
       return *it;
     }
     return std::nullopt;
   }
 
-  std::optional<database::domain::User> find_by_email(const std::string& email) override {
-    auto it = std::find_if(users_.begin(), users_.end(), [&email](const auto& u) { return u.email == email; });
+  std::optional<database::domain::User> find_by_email(const std::string& email, bool include_deleted = false) override {
+    auto it = std::find_if(users_.begin(), users_.end(), [&email, include_deleted](const auto& u) {
+      return u.email == email && (include_deleted || !u.deleted_at.has_value());
+    });
     if (it != users_.end()) {
       return *it;
     }
@@ -139,6 +143,15 @@ class FakeUserRepository final : public database::repository::IUserRepository {
   }
 
   bool delete_by_id(std::int64_t id) override {
+    auto it = std::find_if(users_.begin(), users_.end(), [id](const auto& u) { return u.id == id; });
+    if (it != users_.end()) {
+      it->deleted_at = "2026-09-11 12:00:00";
+      return true;
+    }
+    return false;
+  }
+
+  bool hard_delete_by_id(std::int64_t id) override {
     auto it = std::remove_if(users_.begin(), users_.end(), [id](const auto& u) { return u.id == id; });
     if (it != users_.end()) {
       users_.erase(it, users_.end());
@@ -147,8 +160,14 @@ class FakeUserRepository final : public database::repository::IUserRepository {
     return false;
   }
 
-  std::vector<database::domain::User> find_all() override {
-    return users_;
+  std::vector<database::domain::User> find_all(bool include_deleted = false) override {
+    std::vector<database::domain::User> active;
+    for (const auto& u : users_) {
+      if (include_deleted || !u.deleted_at.has_value()) {
+        active.push_back(u);
+      }
+    }
+    return active;
   }
 
  private:
@@ -575,4 +594,64 @@ TEST(ObservabilityTest, PreservesExceptionSemanticsOnQueryFailure) {
   EXPECT_THROW(executor.execute("UserRepository.fail", "INSERT INTO invalid VALUES (1)", []() {
     throw database::error::ConflictException("Simulated conflict", database::error::EngineType::SQLite);
   }), database::error::ConflictException);
+}
+
+// -----------------------------------------------------------------------------
+// Phase 9: Audit Trail Interceptors & Soft Deletes Tests
+// -----------------------------------------------------------------------------
+
+#include "database/interceptor/audit_context.h"
+#include "database/interceptor/audit_interceptor.h"
+
+TEST(AuditAndSoftDeleteTest, AutomatedAuditFieldsAndSoftDeleteFiltering) {
+  database::Connection conn(":memory:");
+  database::repository::SqliteUserRepository repo(conn);
+  repo.init_schema();
+
+  // Set active operator audit context
+  database::interceptor::AuditContext::set_current({
+      .operator_id = "operator_alice",
+      .tenant_id = "tenant_acme"
+  });
+
+  // Create User
+  database::domain::User user{.id = 0, .name = "Audit Test User", .email = "audit@example.com"};
+  std::int64_t user_id = repo.create(user);
+
+  auto created_user = repo.find_by_id(user_id);
+  ASSERT_TRUE(created_user.has_value());
+  EXPECT_EQ(created_user->created_by, "operator_alice");
+  EXPECT_FALSE(created_user->created_at.empty());
+  EXPECT_FALSE(created_user->deleted_at.has_value());
+
+  // Update User with different operator
+  database::interceptor::AuditContext::set_current({
+      .operator_id = "operator_bob",
+      .tenant_id = "tenant_acme"
+  });
+  created_user->name = "Updated Audit Test User";
+  EXPECT_TRUE(repo.update(*created_user));
+
+  auto updated_user = repo.find_by_id(user_id);
+  ASSERT_TRUE(updated_user.has_value());
+  EXPECT_EQ(updated_user->updated_by, "operator_bob");
+
+  // Perform Soft Delete
+  EXPECT_TRUE(repo.delete_by_id(user_id));
+
+  // Active query should no longer return soft-deleted user
+  EXPECT_FALSE(repo.find_by_id(user_id).has_value());
+  EXPECT_EQ(repo.find_all().size(), 0);
+
+  // Admin query including deleted records should reveal soft-deleted user
+  auto admin_fetched = repo.find_by_id(user_id, true);
+  ASSERT_TRUE(admin_fetched.has_value());
+  EXPECT_TRUE(admin_fetched->deleted_at.has_value());
+  EXPECT_EQ(repo.find_all(true).size(), 1);
+
+  // Perform Administrative Hard Delete
+  EXPECT_TRUE(repo.hard_delete_by_id(user_id));
+  EXPECT_FALSE(repo.find_by_id(user_id, true).has_value());
+
+  database::interceptor::AuditContext::clear();
 }

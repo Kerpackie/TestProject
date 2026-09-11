@@ -31,6 +31,7 @@ The database layer should:
 | 6 | Migration runner | Fresh and upgraded databases converge on the same schema |
 | 7 | Query/mapping layer | Parameterized queries and row-to-struct mapping are consistent and tested |
 | 8 | Diagnostics/profiling | Slow/failing queries produce actionable telemetry without leaking secrets |
+| 9 | Production hardening | Audit context, automated interceptors, and transparent soft delete filtering |
 
 ## Non-Goals
 

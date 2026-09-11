@@ -13,6 +13,8 @@ add_library(database STATIC
   src/query/query_builder.cpp
   src/observability/database_telemetry.cpp
   src/observability/instrumented_executor.cpp
+  src/interceptor/audit_context.cpp
+  src/interceptor/audit_interceptor.cpp
 )
 
 # Public interface: only include/ is exposed to consumers.

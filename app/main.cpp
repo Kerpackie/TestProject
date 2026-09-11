@@ -16,6 +16,8 @@
 #include "database/database_factory.h"
 #include "database/domain/user.h"
 #include "database/error/database_error.h"
+#include "database/interceptor/audit_context.h"
+#include "database/interceptor/audit_interceptor.h"
 #include "database/migration/migration.h"
 #include "database/migration/migration_runner.h"
 #include "database/observability/database_telemetry.h"
@@ -235,6 +237,34 @@ int main() {
     std::cout << " - Fingerprint: " << telemetry_event.statement_fingerprint << '\n';
     std::cout << " - Execution Time: " << telemetry_event.elapsed.count() << " us\n";
     std::cout << " - Outcome Status: " << telemetry_event.outcome << " (" << database::observability::DatabaseTelemetry::category_to_string(telemetry_event.category) << ")\n";
+
+    // -------------------------------------------------------------------------
+    // Phase 9: Audit Trail Interceptors & Soft Delete Demonstration
+    // -------------------------------------------------------------------------
+    std::cout << "\n================================------------------------\n";
+    std::cout << " Phase 9: Audit Trail Interceptors & Soft Deletes";
+    std::cout << "\n================================------------------------\n";
+
+    database::interceptor::AuditContext::set_current({.operator_id = "admin_user_42", .tenant_id = "tenant_enterprise"});
+    database::Connection audit_conn(":memory:");
+    database::repository::SqliteUserRepository audit_repo(audit_conn);
+    audit_repo.init_schema();
+
+    database::domain::User user_to_audit{.id = 0, .name = "Grace Hopper", .email = "grace@navy.mil"};
+    std::int64_t new_audit_id = audit_repo.create(user_to_audit);
+    auto fetched_audited = audit_repo.find_by_id(new_audit_id);
+
+    std::cout << "Created user with Audit Interceptor:\n";
+    if (fetched_audited.has_value()) {
+      std::cout << " - Created By: " << fetched_audited->created_by << '\n';
+      std::cout << " - Created At: " << fetched_audited->created_at << '\n';
+    }
+
+    audit_repo.delete_by_id(new_audit_id);
+    std::cout << "Soft-deleted user ID " << new_audit_id << ". Standard queries now return: " << audit_repo.find_all().size() << " records.\n";
+    std::cout << "Admin query (include_deleted=true) returns: " << audit_repo.find_all(true).size() << " records.\n";
+
+    database::interceptor::AuditContext::clear();
 
   } catch (const std::exception& e) {
     std::cerr << "Fatal error in Composition Root: " << e.what() << '\n';
