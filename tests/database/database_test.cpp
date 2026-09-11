@@ -427,3 +427,69 @@ TEST(ConcurrencyTest, MultiWorkerConcurrentReadsAndWrites) {
   std::filesystem::remove(db_file + "-wal");
   std::filesystem::remove(db_file + "-shm");
 }
+
+// -----------------------------------------------------------------------------
+// Phase 6: Automated Schema Evolution & Idempotent Seeding Tests
+// -----------------------------------------------------------------------------
+
+#include "database/migration/migration.h"
+#include "database/migration/migration_runner.h"
+
+TEST(MigrationRunnerTest, SequentialMigrationAndIdempotentExecution) {
+  database::Connection conn(":memory:");
+  database::migration::MigrationRunner runner;
+
+  std::vector<database::migration::Migration> catalog = {
+      {1, "create_roles_table", "chk1", [](database::Connection& c) {
+         c.execute("CREATE TABLE roles (id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL)");
+       }},
+      {2, "seed_initial_roles", "chk2", [](database::Connection& c) {
+         c.execute("INSERT INTO roles (id, name) VALUES (1, 'Admin') ON CONFLICT(id) DO UPDATE SET name=excluded.name");
+         c.execute("INSERT INTO roles (id, name) VALUES (2, 'User') ON CONFLICT(id) DO UPDATE SET name=excluded.name");
+       }},
+      {3, "add_description_column", "chk3", [](database::Connection& c) {
+         c.execute("ALTER TABLE roles ADD COLUMN description TEXT DEFAULT ''");
+       }},
+  };
+
+  // Run initial migrations
+  runner.run(conn, catalog);
+
+  int applied_count = conn.execute_scalar_int("SELECT COUNT(*) FROM schema_migrations");
+  EXPECT_EQ(applied_count, 3);
+  EXPECT_TRUE(runner.validate_schema_version(conn, 3));
+
+  int role_count = conn.execute_scalar_int("SELECT COUNT(*) FROM roles");
+  EXPECT_EQ(role_count, 2);
+
+  // Second run should be a complete no-op (idempotent)
+  runner.run(conn, catalog);
+  int reapplied_count = conn.execute_scalar_int("SELECT COUNT(*) FROM schema_migrations");
+  EXPECT_EQ(reapplied_count, 3);
+}
+
+TEST(MigrationRunnerTest, TransactionalRollbackOnMigrationFailure) {
+  database::Connection conn(":memory:");
+  database::migration::MigrationRunner runner;
+
+  std::vector<database::migration::Migration> catalog = {
+      {1, "valid_step", "chk1", [](database::Connection& c) {
+         c.execute("CREATE TABLE valid_table (id INT)");
+       }},
+      {2, "failing_step", "chk2", [](database::Connection& c) {
+         c.execute("CREATE TABLE failing_table (id INT)");
+         throw std::runtime_error("Simulated migration failure");
+       }},
+  };
+
+  EXPECT_THROW(runner.run(conn, catalog), std::exception);
+
+  // Migration 1 committed, Migration 2 rolled back cleanly
+  int applied_count = conn.execute_scalar_int("SELECT COUNT(*) FROM schema_migrations");
+  EXPECT_EQ(applied_count, 1);
+  EXPECT_EQ(conn.execute_scalar_int("SELECT COUNT(*) FROM schema_migrations WHERE version = 1"), 1);
+  EXPECT_EQ(conn.execute_scalar_int("SELECT COUNT(*) FROM schema_migrations WHERE version = 2"), 0);
+
+  // Table from failed migration 2 should not exist
+  EXPECT_THROW(conn.execute("SELECT COUNT(*) FROM failing_table"), std::exception);
+}

@@ -9,6 +9,7 @@ add_library(database STATIC
   src/adapter/mariadb_adapter.cpp
   src/concurrency/connection_pool.cpp
   src/concurrency/retry_policy.cpp
+  src/migration/migration_runner.cpp
 )
 
 # Public interface: only include/ is exposed to consumers.

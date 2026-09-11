@@ -16,6 +16,8 @@
 #include "database/database_factory.h"
 #include "database/domain/user.h"
 #include "database/error/database_error.h"
+#include "database/migration/migration.h"
+#include "database/migration/migration_runner.h"
 #include "database/repository/sqlite_user_repository.h"
 #include "database/service/user_service.h"
 #include "database/session/database_session.h"
@@ -163,6 +165,36 @@ int main() {
     std::filesystem::remove(app_db_file);
     std::filesystem::remove(app_db_file + "-wal");
     std::filesystem::remove(app_db_file + "-shm");
+
+    // -------------------------------------------------------------------------
+    // Phase 6: Schema Evolution & Versioned Migration Runner Demonstration
+    // -------------------------------------------------------------------------
+    std::cout << "\n================================------------------------\n";
+    std::cout << " Phase 6: Schema Evolution & Versioned Migration Runner";
+    std::cout << "\n================================------------------------\n";
+
+    database::Connection migration_conn(":memory:");
+    database::migration::MigrationRunner migration_runner;
+
+    std::vector<database::migration::Migration> migration_catalog = {
+        {1, "001_create_system_config", "v1.0", [](database::Connection& c) {
+           c.execute("CREATE TABLE system_config (key TEXT PRIMARY KEY, val TEXT NOT NULL)");
+         }},
+        {2, "002_seed_default_settings", "v1.1", [](database::Connection& c) {
+           c.execute("INSERT INTO system_config (key, val) VALUES ('site_name', 'TestProject Pro') ON CONFLICT(key) DO UPDATE SET val=excluded.val");
+           c.execute("INSERT INTO system_config (key, val) VALUES ('max_workers', '8') ON CONFLICT(key) DO UPDATE SET val=excluded.val");
+         }},
+        {3, "003_add_updated_at_column", "v1.2", [](database::Connection& c) {
+           c.execute("ALTER TABLE system_config ADD COLUMN description TEXT DEFAULT ''");
+         }},
+    };
+
+    std::cout << "Running automated migration pipeline (3 versioned migrations)...\n";
+    migration_runner.run(migration_conn, migration_catalog);
+
+    const int max_version = migration_conn.execute_scalar_int("SELECT MAX(version) FROM schema_migrations");
+    const int config_count = migration_conn.execute_scalar_int("SELECT COUNT(*) FROM system_config");
+    std::cout << "Schema migration complete. Current Schema Version: v" << max_version << ", Config entries seeded: " << config_count << '\n';
 
   } catch (const std::exception& e) {
     std::cerr << "Fatal error in Composition Root: " << e.what() << '\n';
