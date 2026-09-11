@@ -4,6 +4,9 @@ add_library(database STATIC
   src/transaction.cpp
   src/repository/sqlite_user_repository.cpp
   src/service/user_service.cpp
+  src/adapter/sqlite_session.cpp
+  src/adapter/postgres_adapter.cpp
+  src/adapter/mariadb_adapter.cpp
 )
 
 # Public interface: only include/ is exposed to consumers.

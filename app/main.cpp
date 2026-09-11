@@ -1,15 +1,43 @@
 #include <iostream>
 #include <memory>
+#include <vector>
 #include <stdexcept>
 
 #include "core/core.h"
+#include "database/adapter/mariadb_adapter.h"
+#include "database/adapter/postgres_adapter.h"
+#include "database/adapter/sqlite_session.h"
 #include "database/database.h"
 #include "database/database_config.h"
 #include "database/database_factory.h"
 #include "database/domain/user.h"
+#include "database/error/database_error.h"
 #include "database/repository/sqlite_user_repository.h"
 #include "database/service/user_service.h"
+#include "database/session/database_session.h"
 #include "database/transaction.h"
+
+void demonstrate_engine_session(database::session::IDatabaseFactory& factory) {
+  std::cout << "\n--- Bootstrapping Engine: " << database::error::engine_type_to_string(factory.engine_type()) << " ---\n";
+  auto session = factory.create_session();
+  std::cout << "Session active: " << (session->is_open() ? "YES" : "NO") << '\n';
+
+  session->execute("CREATE TABLE users (id INT PRIMARY KEY, email TEXT UNIQUE)");
+
+  {
+    auto tx = session->begin_transaction();
+    session->execute("INSERT INTO users (email) VALUES ('user@example.com')");
+    tx->commit();
+    std::cout << "Transaction committed successfully.\n";
+  }
+
+  // Demonstrate normalized error handling across engines
+  try {
+    session->execute("INSERT INTO users (email) VALUES ('duplicate@example.com')");
+  } catch (const database::error::ConflictException& ex) {
+    std::cout << "Caught normalized ConflictException on " << database::error::engine_type_to_string(ex.engine()) << ": " << ex.what() << '\n';
+  }
+}
 
 int main() {
   std::cout << "TestProject " << core::version() << '\n';
@@ -56,6 +84,27 @@ int main() {
       user_service.register_user("Ada Duplicate", "ada@example.com");
     } catch (const database::service::UserAlreadyExistsException& e) {
       std::cout << "Caught expected domain exception: " << e.what() << '\n';
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 4: Multi-Engine Abstraction & Swapping Demonstration
+    // -------------------------------------------------------------------------
+    std::cout << "\n================================------------------------\n";
+    std::cout << " Phase 4: Multi-Engine Abstraction Demonstration";
+    std::cout << "\n================================------------------------\n";
+
+    database::adapter::SqliteDatabaseFactory sqlite_factory;
+    database::adapter::PostgresDatabaseFactory postgres_factory;
+    database::adapter::MariaDbDatabaseFactory mariadb_factory;
+
+    std::vector<database::session::IDatabaseFactory*> factories = {
+        &sqlite_factory,
+        &postgres_factory,
+        &mariadb_factory,
+    };
+
+    for (auto* factory : factories) {
+      demonstrate_engine_session(*factory);
     }
 
   } catch (const std::exception& e) {

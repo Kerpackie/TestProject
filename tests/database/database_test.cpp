@@ -234,3 +234,79 @@ TEST(SqliteUserRepositoryTest, TransactionBoundaryOverRepositoryOperations) {
 
   EXPECT_EQ(service.list_users().size(), 2);
 }
+
+// -----------------------------------------------------------------------------
+// Phase 4: Cross-Engine Adapter & Error Normalization Contract Tests
+// -----------------------------------------------------------------------------
+
+#include "database/adapter/mariadb_adapter.h"
+#include "database/adapter/postgres_adapter.h"
+#include "database/adapter/sqlite_session.h"
+#include "database/error/database_error.h"
+#include "database/session/database_session.h"
+
+class CrossEngineContractTest : public ::testing::TestWithParam<database::error::EngineType> {};
+
+INSTANTIATE_TEST_SUITE_P(
+    AllEngines,
+    CrossEngineContractTest,
+    ::testing::Values(
+        database::error::EngineType::SQLite,
+        database::error::EngineType::PostgreSQL,
+        database::error::EngineType::MariaDB));
+
+TEST_P(CrossEngineContractTest, UnifiedSessionAndTransactionContract) {
+  database::error::EngineType engine = GetParam();
+  std::unique_ptr<database::session::IDatabaseFactory> factory;
+
+  if (engine == database::error::EngineType::SQLite) {
+    factory = std::make_unique<database::adapter::SqliteDatabaseFactory>();
+  } else if (engine == database::error::EngineType::PostgreSQL) {
+    factory = std::make_unique<database::adapter::PostgresDatabaseFactory>();
+  } else {
+    factory = std::make_unique<database::adapter::MariaDbDatabaseFactory>();
+  }
+
+  EXPECT_EQ(factory->engine_type(), engine);
+
+  auto session = factory->create_session();
+  EXPECT_TRUE(session->is_open());
+  EXPECT_EQ(session->engine_type(), engine);
+
+  session->execute("CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT UNIQUE)");
+
+  {
+    auto tx = session->begin_transaction();
+    session->execute("INSERT INTO users (email) VALUES ('user@example.com')");
+    tx->commit();
+    EXPECT_TRUE(tx->is_committed());
+  }
+
+  EXPECT_EQ(session->execute_scalar_int("SELECT COUNT(*) FROM users"), 1);
+}
+
+TEST_P(CrossEngineContractTest, NormalizedConflictExceptionOnDuplicateInsert) {
+  database::error::EngineType engine = GetParam();
+  std::unique_ptr<database::session::IDatabaseSession> session;
+
+  if (engine == database::error::EngineType::SQLite) {
+    session = std::make_unique<database::adapter::SqliteSession>();
+  } else if (engine == database::error::EngineType::PostgreSQL) {
+    session = std::make_unique<database::adapter::PostgresSession>();
+  } else {
+    session = std::make_unique<database::adapter::MariaDbSession>();
+  }
+
+  session->execute("CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT UNIQUE)");
+  session->execute("INSERT INTO users (email) VALUES ('duplicate@example.com')");
+
+  // Verify that every engine adapter normalizes duplicate entries to database::error::ConflictException
+  try {
+    session->execute("INSERT INTO users (email) VALUES ('duplicate@example.com')");
+    FAIL() << "Expected ConflictException was not thrown";
+  } catch (const database::error::ConflictException& ex) {
+    EXPECT_EQ(ex.engine(), engine);
+  } catch (const std::exception& ex) {
+    FAIL() << "Caught unnormalized exception: " << ex.what();
+  }
+}
