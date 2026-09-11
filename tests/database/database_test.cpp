@@ -493,3 +493,38 @@ TEST(MigrationRunnerTest, TransactionalRollbackOnMigrationFailure) {
   // Table from failed migration 2 should not exist
   EXPECT_THROW(conn.execute("SELECT COUNT(*) FROM failing_table"), std::exception);
 }
+
+// -----------------------------------------------------------------------------
+// Phase 7: Query Builder, Whitelisted Ordering & Safe Parameter Mapping Tests
+// -----------------------------------------------------------------------------
+
+#include "database/query/query_builder.h"
+#include "database/query/sql_statement.h"
+
+TEST(QueryBuilderTest, WhitelistedSQLClauseGenerationAndParameterBinding) {
+  database::query::QueryBuilder builder("users");
+  builder.select({"id", "name", "email"})
+      .where_equals("email", "ada@example.com")
+      .order_by(database::query::UserSortField::Name, database::query::SqlStatement::OrderDirection::Descending)
+      .limit(10)
+      .offset(20);
+
+  std::string sql = builder.build_sql();
+  EXPECT_EQ(sql, "SELECT id, name, email FROM users WHERE email = ? ORDER BY name DESC LIMIT 10 OFFSET 20");
+
+  ASSERT_EQ(builder.bound_values().size(), 1);
+  EXPECT_EQ(builder.bound_values()[0], "ada@example.com");
+}
+
+TEST(QueryBuilderTest, SQLInjectionPreventionViaWhitelistedEnums) {
+  // Attacker attempting SQL injection via order field or direction
+  database::query::QueryBuilder builder("users");
+
+  // User input "name; DROP TABLE users; --" mapped to enum UserSortField::Name safely
+  database::query::UserSortField user_selected_field = database::query::UserSortField::Name;
+  builder.order_by(user_selected_field, database::query::SqlStatement::OrderDirection::Ascending);
+
+  std::string sql = builder.build_sql();
+  EXPECT_EQ(sql, "SELECT * FROM users ORDER BY name ASC");
+  EXPECT_TRUE(sql.find("DROP TABLE") == std::string::npos);
+}

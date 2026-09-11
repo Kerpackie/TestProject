@@ -10,6 +10,7 @@ add_library(database STATIC
   src/concurrency/connection_pool.cpp
   src/concurrency/retry_policy.cpp
   src/migration/migration_runner.cpp
+  src/query/query_builder.cpp
 )
 
 # Public interface: only include/ is exposed to consumers.

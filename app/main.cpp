@@ -18,6 +18,8 @@
 #include "database/error/database_error.h"
 #include "database/migration/migration.h"
 #include "database/migration/migration_runner.h"
+#include "database/query/query_builder.h"
+#include "database/query/sql_statement.h"
 #include "database/repository/sqlite_user_repository.h"
 #include "database/service/user_service.h"
 #include "database/session/database_session.h"
@@ -195,6 +197,23 @@ int main() {
     const int max_version = migration_conn.execute_scalar_int("SELECT MAX(version) FROM schema_migrations");
     const int config_count = migration_conn.execute_scalar_int("SELECT COUNT(*) FROM system_config");
     std::cout << "Schema migration complete. Current Schema Version: v" << max_version << ", Config entries seeded: " << config_count << '\n';
+
+    // -------------------------------------------------------------------------
+    // Phase 7: Type-Safe Query Builder & Parameter Mapping Demonstration
+    // -------------------------------------------------------------------------
+    std::cout << "\n================================------------------------\n";
+    std::cout << " Phase 7: Safe Query Builder & Whitelisted Parameter Binding";
+    std::cout << "\n================================------------------------\n";
+
+    database::query::QueryBuilder qb("system_config");
+    qb.select({"key", "val"})
+      .where_equals("key", "site_name")
+      .order_by(database::query::UserSortField::Name, database::query::SqlStatement::OrderDirection::Ascending)
+      .limit(5);
+
+    std::string generated_sql = qb.build_sql();
+    std::cout << "Generated Parameterized SQL: " << generated_sql << '\n';
+    std::cout << "Bound Query Parameters: [" << qb.bound_values()[0] << "]\n";
 
   } catch (const std::exception& e) {
     std::cerr << "Fatal error in Composition Root: " << e.what() << '\n';
