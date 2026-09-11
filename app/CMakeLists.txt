@@ -1,3 +1,3 @@
 add_executable(app main.cpp)
 
-target_link_libraries(app PRIVATE core)
+target_link_libraries(app PRIVATE core database)
