@@ -18,6 +18,8 @@
 #include "database/error/database_error.h"
 #include "database/migration/migration.h"
 #include "database/migration/migration_runner.h"
+#include "database/observability/database_telemetry.h"
+#include "database/observability/instrumented_executor.h"
 #include "database/query/query_builder.h"
 #include "database/query/sql_statement.h"
 #include "database/repository/sqlite_user_repository.h"
@@ -214,6 +216,25 @@ int main() {
     std::string generated_sql = qb.build_sql();
     std::cout << "Generated Parameterized SQL: " << generated_sql << '\n';
     std::cout << "Bound Query Parameters: [" << qb.bound_values()[0] << "]\n";
+
+    // -------------------------------------------------------------------------
+    // Phase 8: Logging, Diagnostics & Performance Profiling Demonstration
+    // -------------------------------------------------------------------------
+    std::cout << "\n================================------------------------\n";
+    std::cout << " Phase 8: Observability, Fingerprinting & Performance Telemetry";
+    std::cout << "\n================================------------------------\n";
+
+    database::observability::InstrumentedExecutor telemetry_executor(std::chrono::microseconds(500));
+
+    auto telemetry_event = telemetry_executor.execute("SystemConfig.fetch", "SELECT val FROM system_config WHERE key = 'site_name'", [&migration_conn]() {
+      return migration_conn.execute_scalar_int("SELECT COUNT(*) FROM system_config");
+    });
+
+    std::cout << "Telemetry Event Captured:\n";
+    std::cout << " - Operation: " << telemetry_event.operation << '\n';
+    std::cout << " - Fingerprint: " << telemetry_event.statement_fingerprint << '\n';
+    std::cout << " - Execution Time: " << telemetry_event.elapsed.count() << " us\n";
+    std::cout << " - Outcome Status: " << telemetry_event.outcome << " (" << database::observability::DatabaseTelemetry::category_to_string(telemetry_event.category) << ")\n";
 
   } catch (const std::exception& e) {
     std::cerr << "Fatal error in Composition Root: " << e.what() << '\n';

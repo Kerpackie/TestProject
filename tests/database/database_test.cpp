@@ -528,3 +528,51 @@ TEST(QueryBuilderTest, SQLInjectionPreventionViaWhitelistedEnums) {
   EXPECT_EQ(sql, "SELECT * FROM users ORDER BY name ASC");
   EXPECT_TRUE(sql.find("DROP TABLE") == std::string::npos);
 }
+
+// -----------------------------------------------------------------------------
+// Phase 8: Logging, Diagnostics & Performance Profiling Tests
+// -----------------------------------------------------------------------------
+
+#include "database/observability/database_telemetry.h"
+#include "database/observability/instrumented_executor.h"
+#include "database/observability/query_fingerprint.h"
+
+TEST(ObservabilityTest, QueryFingerprintingAndParameterMasking) {
+  std::string raw_sql = "SELECT * FROM users WHERE email = 'secret_user@domain.com' AND age = 25 AND role = 'Admin'";
+  std::string fingerprint = database::observability::QueryFingerprint::sanitize_and_fingerprint(raw_sql);
+
+  EXPECT_EQ(fingerprint, "SELECT * FROM users WHERE email = ? AND age = ? AND role = ?");
+  EXPECT_TRUE(fingerprint.find("secret_user@domain.com") == std::string::npos);
+  EXPECT_TRUE(fingerprint.find("25") == std::string::npos);
+}
+
+TEST(ObservabilityTest, DurationProfilingAndSlowQueryClassification) {
+  database::observability::InstrumentedExecutor executor(std::chrono::microseconds(1000)); // 1ms threshold
+
+  // Fast query
+  auto fast_event = executor.execute("UserRepository.find_by_id", "SELECT id FROM users WHERE id = 10", []() {
+    return 1;
+  });
+
+  EXPECT_EQ(fast_event.operation, "UserRepository.find_by_id");
+  EXPECT_EQ(fast_event.statement_fingerprint, "SELECT id FROM users WHERE id = ?");
+  EXPECT_EQ(fast_event.outcome, "success");
+  EXPECT_EQ(fast_event.rows_affected, 1);
+
+  // Simulated slow query
+  auto slow_event = executor.execute("UserRepository.search_all", "SELECT * FROM users WHERE name = 'John'", []() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    return 50;
+  });
+
+  EXPECT_TRUE(slow_event.category == database::observability::QueryCategory::SlowQuery ||
+              slow_event.category == database::observability::QueryCategory::Critical);
+}
+
+TEST(ObservabilityTest, PreservesExceptionSemanticsOnQueryFailure) {
+  database::observability::InstrumentedExecutor executor;
+
+  EXPECT_THROW(executor.execute("UserRepository.fail", "INSERT INTO invalid VALUES (1)", []() {
+    throw database::error::ConflictException("Simulated conflict", database::error::EngineType::SQLite);
+  }), database::error::ConflictException);
+}

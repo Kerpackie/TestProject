@@ -11,6 +11,8 @@ add_library(database STATIC
   src/concurrency/retry_policy.cpp
   src/migration/migration_runner.cpp
   src/query/query_builder.cpp
+  src/observability/database_telemetry.cpp
+  src/observability/instrumented_executor.cpp
 )
 
 # Public interface: only include/ is exposed to consumers.
