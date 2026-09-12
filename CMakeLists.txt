@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(TestProject
+project(ApplicationStarterTemplate
   VERSION 0.1.0
-  DESCRIPTION "Minimal C++20 project scaffold"
+  DESCRIPTION "C++ desktop app starter template with Dear ImGui and SQLite"
   LANGUAGES CXX
 )
 

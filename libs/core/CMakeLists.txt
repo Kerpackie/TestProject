@@ -1,5 +1,6 @@
 add_library(core STATIC
   src/core.cpp
+  src/app_config.cpp
 )
 
 # Public interface: only include/ is exposed to consumers.

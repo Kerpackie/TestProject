@@ -1,0 +1,32 @@
+name: Initialize Project Template
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_name:
+        description: New project name
+        required: true
+        default: MyApp
+      project_description:
+        description: Short project description
+        required: false
+        default: Modern C++20 desktop application
+      project_namespace:
+        description: C++ namespace for the new app
+        required: false
+        default: myapp
+
+jobs:
+  init-template:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run initializer
+        shell: bash
+        run: |
+          bash scripts/init_project.sh \
+            "${{ github.event.inputs.project_name }}" \
+            "${{ github.event.inputs.project_description }}" \
+            "${{ github.event.inputs.project_namespace }}"

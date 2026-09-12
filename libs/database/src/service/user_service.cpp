@@ -14,11 +14,33 @@ domain::User UserService::register_user(const std::string& name, const std::stri
       .id = 0,
       .name = name,
       .email = email,
+      .created_at = "",
+      .updated_at = "",
+      .created_by = "system",
+      .updated_by = "system",
+      .deleted_at = std::nullopt,
   };
 
   const std::int64_t new_id = repository_.create(new_user);
   new_user.id = new_id;
   return new_user;
+}
+
+bool UserService::update_user(std::int64_t id, const std::string& name, const std::string& email) {
+  auto existing = repository_.find_by_id(id);
+  if (!existing.has_value()) {
+    return false;
+  }
+
+  auto email_owner = repository_.find_by_email(email);
+  if (email_owner.has_value() && email_owner->id != id) {
+    throw UserAlreadyExistsException(email);
+  }
+
+  domain::User updated = *existing;
+  updated.name = name;
+  updated.email = email;
+  return repository_.update(updated);
 }
 
 std::optional<domain::User> UserService::get_user_by_id(std::int64_t id) {

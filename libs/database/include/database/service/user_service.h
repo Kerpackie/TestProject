@@ -21,6 +21,7 @@ class UserService final {
   explicit UserService(repository::IUserRepository& repository);
 
   domain::User register_user(const std::string& name, const std::string& email);
+  bool update_user(std::int64_t id, const std::string& name, const std::string& email);
   std::optional<domain::User> get_user_by_id(std::int64_t id);
   std::optional<domain::User> get_user_by_email(const std::string& email);
   std::vector<domain::User> list_users();

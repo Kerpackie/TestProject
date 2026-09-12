@@ -1,0 +1,12 @@
+BasedOnStyle: LLVM
+IndentWidth: 2
+TabWidth: 2
+UseTab: Never
+ColumnLimit: 100
+BreakBeforeBraces: Allman
+AlignConsecutiveAssignments: true
+AlignConsecutiveDeclarations: true
+PointerAlignment: Left
+SortIncludes: true
+NamespaceIndentation: All
+SpaceBeforeParens: ControlStatements
