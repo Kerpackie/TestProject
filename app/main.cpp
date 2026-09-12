@@ -28,12 +28,15 @@
 #include "database/service/user_service.h"
 #include "database/session/database_session.h"
 #include "database/transaction.h"
-#include "views/imgui_demo_view.h"
+#include "views/app_demo_view.h"
 
-void demonstrate_engine_session(database::session::IDatabaseFactory& factory) {
-  std::cout << "\n--- Bootstrapping Engine: " << database::error::engine_type_to_string(factory.engine_type()) << " ---\n";
+views::PhaseResult demonstrate_engine_session(database::session::IDatabaseFactory& factory) {
+  views::PhaseResult result{
+      .title = "Phase 4: Multi-Engine Abstraction",
+  };
   auto session = factory.create_session();
-  std::cout << "Session active: " << (session->is_open() ? "YES" : "NO") << '\n';
+  result.lines.push_back("Bootstrapping Engine: " + database::error::engine_type_to_string(factory.engine_type()));
+  result.lines.push_back(std::string("Session active: ") + (session->is_open() ? "YES" : "NO"));
 
   session->execute("CREATE TABLE users (id INT PRIMARY KEY, email TEXT UNIQUE)");
 
@@ -41,70 +44,64 @@ void demonstrate_engine_session(database::session::IDatabaseFactory& factory) {
     auto tx = session->begin_transaction();
     session->execute("INSERT INTO users (email) VALUES ('user@example.com')");
     tx->commit();
-    std::cout << "Transaction committed successfully.\n";
+    result.lines.push_back("Transaction committed successfully.");
   }
 
-  // Demonstrate normalized error handling across engines
   try {
     session->execute("INSERT INTO users (email) VALUES ('duplicate@example.com')");
   } catch (const database::error::ConflictException& ex) {
-    std::cout << "Caught normalized ConflictException on " << database::error::engine_type_to_string(ex.engine()) << ": " << ex.what() << '\n';
+    result.lines.push_back("Caught normalized ConflictException on " +
+                           database::error::engine_type_to_string(ex.engine()) + ": " + ex.what());
   }
+  return result;
 }
 
 int main() {
-  std::cout << "TestProject " << core::version() << '\n';
-  std::cout << "Database module version " << database::version() << '\n';
-
   try {
-    // 1. Composition Root: Infrastructure Configuration
     database::DatabaseConfig config{
         .database_path = ":memory:",
         .busy_timeout = std::chrono::milliseconds(5000),
         .foreign_keys = true,
     };
 
-    // 2. Composition Root: Instantiate Infrastructure Connection
     database::Connection conn = database::DatabaseFactory::create(config);
-
-    // 3. Composition Root: Instantiate Concrete Repository
     database::repository::SqliteUserRepository user_repo(conn);
     user_repo.init_schema();
-
-    // 4. Composition Root: Inject Repository into Application Service (Manual DI)
     database::service::UserService user_service(user_repo);
 
-    std::cout << "\n--- Executing Phase 3 Application Use Cases (Manual DI) ---\n";
-
-    // Use Case 1: Register Users
     {
       database::Transaction tx(conn);
-      auto user1 = user_service.register_user("Ada Lovelace", "ada@example.com");
-      auto user2 = user_service.register_user("Alan Turing", "alan@example.com");
+      user_service.register_user("Ada Lovelace", "ada@example.com");
+      user_service.register_user("Alan Turing", "alan@example.com");
       tx.commit();
-      std::cout << "Registered users in transaction: ID " << user1.id << " (" << user1.name << "), ID " << user2.id << " (" << user2.name << ")\n";
     }
 
-    // Use Case 2: Query Users
     auto all_users = user_service.list_users();
-    std::cout << "Total registered users: " << all_users.size() << '\n';
+    views::AppDemoData app_data{
+        .project_version = core::version(),
+        .database_version = database::version(),
+    };
     for (const auto& user : all_users) {
-      std::cout << " - [" << user.id << "] " << user.name << " <" << user.email << ">\n";
+      app_data.users.push_back({.id = user.id, .name = user.name, .email = user.email});
     }
 
-    // Use Case 3: Duplicate Registration Validation (Service Business Logic)
+    views::PhaseResult phase3{
+        .title = "Phase 3: Repository + Manual DI",
+        .lines = {
+            "Registered two users inside an explicit transaction.",
+            "Total registered users: " + std::to_string(all_users.size()),
+        },
+    };
+    for (const auto& user : all_users) {
+      phase3.lines.push_back("[" + std::to_string(user.id) + "] " + user.name + " <" + user.email + ">");
+    }
+
     try {
       user_service.register_user("Ada Duplicate", "ada@example.com");
     } catch (const database::service::UserAlreadyExistsException& e) {
-      std::cout << "Caught expected domain exception: " << e.what() << '\n';
+      phase3.lines.push_back("Caught expected domain exception: " + std::string(e.what()));
     }
-
-    // -------------------------------------------------------------------------
-    // Phase 4: Multi-Engine Abstraction & Swapping Demonstration
-    // -------------------------------------------------------------------------
-    std::cout << "\n================================------------------------\n";
-    std::cout << " Phase 4: Multi-Engine Abstraction Demonstration";
-    std::cout << "\n================================------------------------\n";
+    app_data.phases.push_back(std::move(phase3));
 
     database::adapter::SqliteDatabaseFactory sqlite_factory;
     database::adapter::PostgresDatabaseFactory postgres_factory;
@@ -116,16 +113,14 @@ int main() {
         &mariadb_factory,
     };
 
+    views::PhaseResult phase4{
+        .title = "Phase 4: Multi-Engine Abstraction",
+    };
     for (auto* factory : factories) {
-      demonstrate_engine_session(*factory);
+      auto engine_result = demonstrate_engine_session(*factory);
+      phase4.lines.insert(phase4.lines.end(), engine_result.lines.begin(), engine_result.lines.end());
     }
-
-    // -------------------------------------------------------------------------
-    // Phase 5: Concurrency & Thread-Safe Connection Pool Demonstration
-    // -------------------------------------------------------------------------
-    std::cout << "\n================================------------------------\n";
-    std::cout << " Phase 5: Concurrency, Thread Safety & Connection Pool";
-    std::cout << "\n================================------------------------\n";
+    app_data.phases.push_back(std::move(phase4));
 
     const std::string app_db_file = "app_concurrent.db";
     std::filesystem::remove(app_db_file);
@@ -146,9 +141,6 @@ int main() {
     database::concurrency::ConnectionPool pool(concurrent_config, 4);
     database::concurrency::RetryPolicy retry(3, std::chrono::milliseconds(10));
 
-    std::cout << "ConnectionPool initialized with 4 PooledConnections in WAL mode.\n";
-    std::cout << "Dispatching 4 concurrent worker threads to write audit logs...\n";
-
     std::vector<std::thread> workers;
     for (int w = 1; w <= 4; ++w) {
       workers.emplace_back([&pool, &retry, w]() {
@@ -167,18 +159,18 @@ int main() {
 
     database::Connection check_conn(concurrent_config);
     const int audit_count = check_conn.execute_scalar_int("SELECT COUNT(*) FROM audit_log");
-    std::cout << "Concurrent audit writes completed successfully. Total log entries: " << audit_count << '\n';
+    app_data.phases.push_back({
+        .title = "Phase 5: Concurrency + Connection Pool",
+        .lines = {
+            "ConnectionPool initialized with 4 pooled connections in WAL mode.",
+            "Dispatched 4 concurrent worker threads to write audit logs.",
+            "Concurrent audit writes completed successfully. Total log entries: " + std::to_string(audit_count),
+        },
+    });
 
     std::filesystem::remove(app_db_file);
     std::filesystem::remove(app_db_file + "-wal");
     std::filesystem::remove(app_db_file + "-shm");
-
-    // -------------------------------------------------------------------------
-    // Phase 6: Schema Evolution & Versioned Migration Runner Demonstration
-    // -------------------------------------------------------------------------
-    std::cout << "\n================================------------------------\n";
-    std::cout << " Phase 6: Schema Evolution & Versioned Migration Runner";
-    std::cout << "\n================================------------------------\n";
 
     database::Connection migration_conn(":memory:");
     database::migration::MigrationRunner migration_runner;
@@ -195,20 +187,18 @@ int main() {
            c.execute("ALTER TABLE system_config ADD COLUMN description TEXT DEFAULT ''");
          }},
     };
-
-    std::cout << "Running automated migration pipeline (3 versioned migrations)...\n";
     migration_runner.run(migration_conn, migration_catalog);
 
     const int max_version = migration_conn.execute_scalar_int("SELECT MAX(version) FROM schema_migrations");
     const int config_count = migration_conn.execute_scalar_int("SELECT COUNT(*) FROM system_config");
-    std::cout << "Schema migration complete. Current Schema Version: v" << max_version << ", Config entries seeded: " << config_count << '\n';
-
-    // -------------------------------------------------------------------------
-    // Phase 7: Type-Safe Query Builder & Parameter Mapping Demonstration
-    // -------------------------------------------------------------------------
-    std::cout << "\n================================------------------------\n";
-    std::cout << " Phase 7: Safe Query Builder & Whitelisted Parameter Binding";
-    std::cout << "\n================================------------------------\n";
+    app_data.phases.push_back({
+        .title = "Phase 6: Migrations",
+        .lines = {
+            "Ran automated migration pipeline with 3 versioned migrations.",
+            "Schema migration complete. Current Schema Version: v" + std::to_string(max_version) +
+                ", Config entries seeded: " + std::to_string(config_count),
+        },
+    });
 
     database::query::QueryBuilder qb("system_config");
     qb.select({"key", "val"})
@@ -217,15 +207,13 @@ int main() {
       .limit(5);
 
     std::string generated_sql = qb.build_sql();
-    std::cout << "Generated Parameterized SQL: " << generated_sql << '\n';
-    std::cout << "Bound Query Parameters: [" << qb.bound_values()[0] << "]\n";
-
-    // -------------------------------------------------------------------------
-    // Phase 8: Logging, Diagnostics & Performance Profiling Demonstration
-    // -------------------------------------------------------------------------
-    std::cout << "\n================================------------------------\n";
-    std::cout << " Phase 8: Observability, Fingerprinting & Performance Telemetry";
-    std::cout << "\n================================------------------------\n";
+    app_data.phases.push_back({
+        .title = "Phase 7: Query Builder",
+        .lines = {
+            "Generated parameterized SQL: " + generated_sql,
+            "Bound query parameters: [" + qb.bound_values()[0] + "]",
+        },
+    });
 
     database::observability::InstrumentedExecutor telemetry_executor(std::chrono::microseconds(500));
 
@@ -233,18 +221,16 @@ int main() {
       return migration_conn.execute_scalar_int("SELECT COUNT(*) FROM system_config");
     });
 
-    std::cout << "Telemetry Event Captured:\n";
-    std::cout << " - Operation: " << telemetry_event.operation << '\n';
-    std::cout << " - Fingerprint: " << telemetry_event.statement_fingerprint << '\n';
-    std::cout << " - Execution Time: " << telemetry_event.elapsed.count() << " us\n";
-    std::cout << " - Outcome Status: " << telemetry_event.outcome << " (" << database::observability::DatabaseTelemetry::category_to_string(telemetry_event.category) << ")\n";
-
-    // -------------------------------------------------------------------------
-    // Phase 9: Audit Trail Interceptors & Soft Delete Demonstration
-    // -------------------------------------------------------------------------
-    std::cout << "\n================================------------------------\n";
-    std::cout << " Phase 9: Audit Trail Interceptors & Soft Deletes";
-    std::cout << "\n================================------------------------\n";
+    app_data.phases.push_back({
+        .title = "Phase 8: Observability",
+        .lines = {
+            "Operation: " + telemetry_event.operation,
+            "Fingerprint: " + telemetry_event.statement_fingerprint,
+            "Execution Time: " + std::to_string(telemetry_event.elapsed.count()) + " us",
+            "Outcome Status: " + telemetry_event.outcome + " (" +
+                database::observability::DatabaseTelemetry::category_to_string(telemetry_event.category) + ")",
+        },
+    });
 
     database::interceptor::AuditContext::set_current({.operator_id = "admin_user_42", .tenant_id = "tenant_enterprise"});
     database::Connection audit_conn(":memory:");
@@ -255,28 +241,26 @@ int main() {
     std::int64_t new_audit_id = audit_repo.create(user_to_audit);
     auto fetched_audited = audit_repo.find_by_id(new_audit_id);
 
-    std::cout << "Created user with Audit Interceptor:\n";
+    views::PhaseResult phase9{
+        .title = "Phase 9: Audit Trail + Soft Delete",
+        .lines = {
+            "Created user with Audit Interceptor:",
+        },
+    };
     if (fetched_audited.has_value()) {
-      std::cout << " - Created By: " << fetched_audited->created_by << '\n';
-      std::cout << " - Created At: " << fetched_audited->created_at << '\n';
+      phase9.lines.push_back("Created By: " + fetched_audited->created_by);
+      phase9.lines.push_back("Created At: " + fetched_audited->created_at);
     }
 
     audit_repo.delete_by_id(new_audit_id);
-    std::cout << "Soft-deleted user ID " << new_audit_id << ". Standard queries now return: " << audit_repo.find_all().size() << " records.\n";
-    std::cout << "Admin query (include_deleted=true) returns: " << audit_repo.find_all(true).size() << " records.\n";
+    phase9.lines.push_back("Soft-deleted user ID " + std::to_string(new_audit_id) +
+                           ". Standard queries now return: " + std::to_string(audit_repo.find_all().size()) + " records.");
+    phase9.lines.push_back("Admin query (include_deleted=true) returns: " +
+                           std::to_string(audit_repo.find_all(true).size()) + " records.");
+    app_data.phases.push_back(std::move(phase9));
 
     database::interceptor::AuditContext::clear();
-
-    // -------------------------------------------------------------------------
-    // Phase 10: Dear ImGui Integration Demonstration
-    // -------------------------------------------------------------------------
-    std::cout << "\n================================------------------------\n";
-    std::cout << " Phase 10: Dear ImGui Integration";
-    std::cout << "\n================================------------------------\n";
-
-    if (views::demonstrate_imgui_phase() != 0) {
-      return 1;
-    }
+    return views::run_app_demo(app_data);
 
   } catch (const std::exception& e) {
     std::cerr << "Fatal error in Composition Root: " << e.what() << '\n';

@@ -1,4 +1,5 @@
 add_library(views STATIC
+  src/app_demo_view.cpp
   src/imgui_demo_view.cpp
 )
 

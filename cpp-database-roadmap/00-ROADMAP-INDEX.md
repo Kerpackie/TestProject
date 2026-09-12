@@ -33,6 +33,7 @@ The database layer should:
 | 8 | Diagnostics/profiling | Slow/failing queries produce actionable telemetry without leaking secrets |
 | 9 | Production hardening | Audit context, automated interceptors, and transparent soft delete filtering |
 | 10 | Dear ImGui integration | Immediate-mode UI is linked, scripted, and demonstrated from the app target |
+| 11 | UI-driven application demo | Phase workflows are surfaced through persistent ImGui controls instead of console-only startup output |
 
 ## Non-Goals
 
