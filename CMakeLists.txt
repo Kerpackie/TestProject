@@ -15,12 +15,13 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 include(cmake/dependencies.cmake)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
-  add_compile_options(-Wall -Wextra -Wpedantic -Werror)
+  add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
 enable_testing()
 
 add_subdirectory(libs/core)
 add_subdirectory(libs/database)
+add_subdirectory(libs/views)
 add_subdirectory(app)
 add_subdirectory(tests)

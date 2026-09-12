@@ -28,6 +28,7 @@
 #include "database/service/user_service.h"
 #include "database/session/database_session.h"
 #include "database/transaction.h"
+#include "views/imgui_demo_view.h"
 
 void demonstrate_engine_session(database::session::IDatabaseFactory& factory) {
   std::cout << "\n--- Bootstrapping Engine: " << database::error::engine_type_to_string(factory.engine_type()) << " ---\n";
@@ -265,6 +266,17 @@ int main() {
     std::cout << "Admin query (include_deleted=true) returns: " << audit_repo.find_all(true).size() << " records.\n";
 
     database::interceptor::AuditContext::clear();
+
+    // -------------------------------------------------------------------------
+    // Phase 10: Dear ImGui Integration Demonstration
+    // -------------------------------------------------------------------------
+    std::cout << "\n================================------------------------\n";
+    std::cout << " Phase 10: Dear ImGui Integration";
+    std::cout << "\n================================------------------------\n";
+
+    if (views::demonstrate_imgui_phase() != 0) {
+      return 1;
+    }
 
   } catch (const std::exception& e) {
     std::cerr << "Fatal error in Composition Root: " << e.what() << '\n';
