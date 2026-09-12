@@ -1,0 +1,58 @@
+name: Template Initialization
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_name:
+        description: "Project Name (CamelCase / PascalCase, e.g. AudioEngine)"
+        required: true
+        default: "MyProject"
+      project_description:
+        description: "Short Project Description"
+        required: false
+        default: "Modern C++20 application"
+
+jobs:
+  initialize-template:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Apply project customizations
+        run: |
+          PROJECT_NAME="${{ github.event.inputs.project_name }}"
+          PROJECT_DESC="${{ github.event.inputs.project_description }}"
+
+          # If project name is default/empty, use repository name
+          if [ -z "$PROJECT_NAME" ] || [ "$PROJECT_NAME" = "MyProject" ]; then
+            REPO_NAME="${{ github.event.repository.name }}"
+            PROJECT_NAME="$REPO_NAME"
+          fi
+
+          echo "Initializing project as: $PROJECT_NAME ($PROJECT_DESC)"
+
+          # Replace in CMakeLists.txt
+          sed -i "s|project(TestProject|project(${PROJECT_NAME}|g" CMakeLists.txt
+          sed -i "s|DESCRIPTION \"Minimal C++20 project scaffold\"|DESCRIPTION \"${PROJECT_DESC}\"|g" CMakeLists.txt
+
+          # Replace in app/main.cpp
+          sed -i "s|\"TestProject \"|\"${PROJECT_NAME} \"|g" app/main.cpp
+
+          # Update README.md
+          sed -i "s|# TestProject|# ${PROJECT_NAME}|g" README.md
+          sed -i "s|Minimal C++20 scaffold: CMake + Ninja, GoogleTest (pinned to v1.16.0), CTest.|${PROJECT_DESC}|g" README.md
+
+          # Remove this setup workflow once initialized
+          rm -f .github/workflows/template-init.yml
+
+      - name: Commit and push changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "chore: initialize project from template" || exit 0
+          git push
